@@ -229,7 +229,7 @@ class SeqModel:
         if buffer is None or len(buffer) == 0:
             return np.full(len(candidates), 1e3)
         else:
-            distances = np.linalg.norm(candidates[:, None, :] -  buffer[None, :, :], axis=2)
+            distances = np.linalg.norm(candidates[:, None, :] -  buffer[None, :, :], axis=2, ord=1)
             return distances.min(axis=1)
     
     
@@ -244,7 +244,7 @@ class SeqModel:
         
         self.ensemble_mu.append(mean_pred)
         self.ensemble_sigma.append(std_pred)
-        return (x_candidates, mean_pred, std_pred, uncertainty, expected_gradient, distances)
+        return (x_candidates, mean_pred, std_pred, uncertainty, expected_gradient, np.reciprocal(distances))
     
     
     @staticmethod

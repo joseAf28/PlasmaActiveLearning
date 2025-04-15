@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 if __name__ == '__main__':
-    # Configuration for a 2D example
+    
     foldername = 'Figures'
     
     ##* Init Configs
@@ -66,9 +66,9 @@ if __name__ == '__main__':
         'subset_frac': 0.7,
         'mc_runs': 1,
         'n_actions': 15,
-        'lambda_vec': np.array([0.15,0.7,0.15])
+        'lambda_vec': np.array([0.25,0.7,0.05])
     }
-    
+
     
     if config['input_size'] == 1:
         bounds = np.array([[0, 2]])
