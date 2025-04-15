@@ -9,6 +9,7 @@ from pyDOE import lhs
 import matplotlib.pyplot as plt
 import time 
 
+from sklearn.preprocessing import StandardScaler
 
 import models
 import PhysicalModel as env
@@ -26,6 +27,28 @@ if __name__ == '__main__':
     # Configuration for a 2D example
     foldername = 'Figures'
     
+    ##* Init Configs
+    # config = {
+    #     'ensemble_size': 10,
+    #     'input_size': 3,         
+    #     'hidden_size': 256,
+    #     'dropout_rate': 0.1,
+    #     'do_dropout': False,
+    #     'output_size': 10,
+        
+    #     'num_epochs': 70,# 150      
+    #     'batch_size': 32,
+    #     'learning_rate': 1e-2,
+        
+    #     'candidate_pool_size': 150,
+    #     'n_samples': 200,    # 30
+    #     'subset_frac': 0.7,
+    #     'mc_runs': 1,
+    #     'n_actions': 15,
+    #     'lambda_vec': np.array([0.2,0.6,0.2])
+    # }
+    
+    ###? new update
     config = {
         'ensemble_size': 10,
         'input_size': 3,         
@@ -34,14 +57,16 @@ if __name__ == '__main__':
         'do_dropout': False,
         'output_size': 10,
         
-        'num_epochs': 100,      
+        'num_epochs': 70,
         'batch_size': 32,
-        'learning_rate': 0.01,
+        'learning_rate': 1e-2,
         
-        'candidate_pool_size': 100,
-        'n_samples': 30,
+        'candidate_pool_size': 150,
+        'n_samples': 200,    # 30
         'subset_frac': 0.7,
-        'mc_runs': 1
+        'mc_runs': 1,
+        'n_actions': 15,
+        'lambda_vec': np.array([0.15,0.7,0.15])
     }
     
     
@@ -55,7 +80,7 @@ if __name__ == '__main__':
         raise ValueError("Input dimension must be 1, 2 or 3")
     
     
-    nb_iters = 30  # Number of active learning iterations
+    nb_iters = 20  # Number of active learning iterations
 
     # Generate initial training samples via LHS (no jitter for initial samples)
     x_init = al.SeqModel.generate_lhs_samples_with_jitter(config['n_samples'], config['input_size'], bounds, jitter=0.0)
@@ -79,7 +104,7 @@ if __name__ == '__main__':
         time_init = time.time()
         
         state = seq_model.state(i)
-        next_samples = seq_model.action(state, n_action=15, lambda_diversity=0.1)
+        next_samples = seq_model.action(state, n_action=config['n_actions'], lambda_vec=config['lambda_vec'])
         seq_model.train_ensemble(next_samples)
         
         time_end = time.time()
@@ -88,13 +113,18 @@ if __name__ == '__main__':
         time_acc += extra_time
         extra_time_vec.append(time_acc)
         
-        ### generate radom data inside the bouds and check the predictions
+        ###! generate radom data inside the bouds and check the predictions
         x_input_random = np.random.uniform(bounds[:, 0], bounds[:, 1], (100, config['input_size']))
         x_input_random_tensor = torch.tensor(x_input_random, dtype=torch.float32)
         y_input_random = env.generate_data(x_input_random_tensor)[1].numpy()
         
-        mean_pred_test, sigma_pred_test, _ = al.SeqModel.ensemble_predict(seq_model.ensemble_models, x_input_random_tensor)
-        loss = np.mean(np.square(mean_pred_test - y_input_random))
+        ##!# scale the data
+        x_input_random_scaled_ensemble = seq_model.standard_scaler_x.transform(x_input_random)
+        y_input_random_scaled_ensemble = seq_model.standard_scaler_y.transform(y_input_random)
+        x_input_random_tensor_scaled_ensemble = torch.tensor(x_input_random_scaled_ensemble, dtype=torch.float32)
+        
+        mean_pred_test, sigma_pred_test, _ = al.SeqModel.ensemble_predict(seq_model.ensemble_models, x_input_random_tensor_scaled_ensemble)
+        loss = np.mean(np.square(mean_pred_test - y_input_random_scaled_ensemble))
         
         loss_test_ensemble_vec.append(loss)
         
@@ -128,9 +158,8 @@ if __name__ == '__main__':
             pass
             # logger.warning("Plotting not implemented for input dimensions greater than 2.")
         
-        ###* Baseline Models And Comparisons
         
-        #### test against a model 
+        ###* Baseline Models And Comparisons
         model_standard = models.SimpleNet(input_dim=config['input_size'],
                                 hidden_dim=config['hidden_size'],
                                 output_dim=config['output_size'],
@@ -139,11 +168,14 @@ if __name__ == '__main__':
         
         
         model_standard_buffer = models.SimpleNet(input_dim=config['input_size'],
-                                        hidden_dim=config['hidden_size'],
-                                        output_dim=config['output_size'],
-                                        dropout_rate=config['dropout_rate'],
-                                        do_dropout=config['do_dropout'])
+                                hidden_dim=config['hidden_size'],
+                                output_dim=config['output_size'],
+                                dropout_rate=config['dropout_rate'],
+                                do_dropout=config['do_dropout'])
         
+        
+        config2 = config.copy()
+        config2['num_epochs'] = 800
         
         n_samples = len(seq_model.buffer[0])
         
@@ -152,41 +184,58 @@ if __name__ == '__main__':
         if i == nb_iters - 1:
             time_init = time.time()
         
-        x_train = al.SeqModel.generate_lhs_samples_with_jitter(n_samples, config['input_size'], bounds, jitter=0.0)
+        standard_scaler_baseline_x = StandardScaler()
+        standard_scaler_baseline_y = StandardScaler()
+        
+        x_train = al.SeqModel.generate_lhs_samples_with_jitter(n_samples, config2['input_size'], bounds, jitter=0.0)
         y_train = env.generate_data(x_train)[1]
-        dataset = TensorDataset(x_train, y_train)
+        
+        x_train_scaled = standard_scaler_baseline_x.fit_transform(x_train)
+        y_train_scaled = standard_scaler_baseline_y.fit_transform(y_train)
+        x_train_tensor = torch.tensor(x_train_scaled, dtype=torch.float32)
+        y_train_tensor = torch.tensor(y_train_scaled, dtype=torch.float32)
+        
+        dataset = TensorDataset(x_train_tensor, y_train_tensor)
         
         ### train the model
-        model_standard = al.SeqModel.train_network(model_standard, dataset, config)
+        model_standard = al.SeqModel.train_network(model_standard, dataset, config2)
         
         dataset_buffer = TensorDataset(seq_model.buffer[0], seq_model.buffer[1])
-        model_standard_buffer = al.SeqModel.train_network(model_standard_buffer, dataset_buffer, config)
+        model_standard_buffer = al.SeqModel.train_network(model_standard_buffer, dataset_buffer, config2)
         
         if i == nb_iters - 1:
             Delta_time_baseline = time.time() - time_init
         
         print()
         
-        ### predict with the model
-        y_test_pred = model_standard(x_input_random_tensor).detach().numpy()
-        loss_baseline = np.mean(np.square(y_test_pred - y_input_random))
+        ###! predict with the model
+        x_input_random_scaled_baseline = standard_scaler_baseline_x.transform(x_input_random)
+        y_input_random_scaled_baseline = standard_scaler_baseline_y.transform(y_input_random)
+        
+        y_test_pred = model_standard(torch.tensor(x_input_random_scaled_baseline, dtype=torch.float32)).detach().numpy()
+        loss_baseline = np.mean(np.square(y_test_pred - y_input_random_scaled_baseline))
         logger.info(f"Baseline Model Test: MSE Loss: {loss_baseline} at iteration {i}")
         
         loss_test_baseline_vec.append(loss_baseline)
         
-        y_test_pred_buffer = model_standard_buffer(x_input_random_tensor).detach().numpy()
-        loss_baseline_buffer = np.mean(np.square(y_test_pred_buffer - y_input_random))
+        y_test_pred_buffer = model_standard_buffer(x_input_random_tensor_scaled_ensemble).detach().numpy()
+        loss_baseline_buffer = np.mean(np.square(y_test_pred_buffer - y_input_random_scaled_ensemble))
         logger.info(f"Baseline Buffer Model Test: MSE Loss: {loss_baseline_buffer} at iteration {i}")
         
         loss_test_baseline_buffer_vec.append(loss_baseline_buffer)
         
         print("------------------------------------------------")
     
+    
     ### save ensemble models and the buffer 
     torch.save(seq_model.ensemble_models, 'ensemble_models.pth')
     torch.save(seq_model.buffer, 'buffer.pth')
-
-
+    
+    ### save the scaler
+    torch.save(seq_model.standard_scaler_x, 'standard_scaler_x.pth')
+    torch.save(seq_model.standard_scaler_y, 'standard_scaler_y.pth')
+    
+    
     ### plot the loss curves
     plt.figure(figsize=(10, 6))
     plt.plot(size_buffer_vec, loss_test_baseline_vec, label='Baseline Model', marker='x')
@@ -199,7 +248,7 @@ if __name__ == '__main__':
     plt.legend()
     plt.grid()
     plt.yscale('log')
-    plt.savefig(f"{foldername}/loss_curves_{config["ensemble_size"]}.png")
+    plt.savefig(f"{foldername}/loss_curves_{config["ensemble_size"]}_{config['lambda_vec']}_{nb_iters}_{config['ensemble_size']}.png")
     
     
     plt.figure(figsize=(10, 6))
@@ -211,5 +260,5 @@ if __name__ == '__main__':
     plt.legend()
     plt.grid()
     plt.yscale('log')
-    plt.savefig(f"{foldername}/time_curves_{config["ensemble_size"]}.png")
+    plt.savefig(f"{foldername}/time_curves_{config["ensemble_size"]}_{config['lambda_vec']}_{nb_iters}_{config['ensemble_size']}.png")
     

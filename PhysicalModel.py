@@ -24,7 +24,7 @@ def generate_data(x: torch.Tensor) -> (torch.Tensor, torch.Tensor):
         y9 = np.sin(x_np[:, 2:3])                    
         y10 = np.exp(-np.abs(x_np[:, 0:1]))        
         
-        y = np.concatenate([y1, y2, y3, y4, y5, y6, y7, y8, y9, y10], axis=1)
+        y = np.concatenate(np.array([y1, y2, y3, y4, y5, y6, y7, y8, y9, y10]), axis=1)
         
     return x, torch.tensor(y, dtype=torch.float32)
 

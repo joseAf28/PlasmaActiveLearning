@@ -1,7 +1,10 @@
 
 
-
+copy/
+scaling/
 Attempts/
+FiguresOld/
+FiguresScale/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -3,26 +3,22 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset
+from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import logging
 from pyDOE import lhs
 import matplotlib.pyplot as plt
 import time 
 
-
 import models
 import PhysicalModel as env
 
 
-
 ###* Sequential Model for Active Learning
-###! For now, I am considering a version of the BALD score as the acquisition function
-###? Later try to implement the EPIG score function
-
 class SeqModel:
 
     def __init__(self, config: dict, bounds: np.ndarray, T: int):
-
+        
         self.config = config
         if not (isinstance(bounds, np.ndarray) and bounds.ndim == 2 and bounds.shape[1] == 2):
             raise ValueError("bounds must be a numpy array of shape (input_dim, 2)")
@@ -42,13 +38,14 @@ class SeqModel:
         self.buffer = None          # Aggregated training data as tuple (x, y)
         self.ensemble_mu = []       # History of ensemble mean predictions
         self.ensemble_sigma = []    # History of ensemble stds
+        
+        self.standard_scaler_x = StandardScaler()
+        self.standard_scaler_y = StandardScaler()
     
     
     ###* Methods to sample the candidate pool - the state
     @staticmethod
-    def generate_lhs_samples_with_jitter(n_samples: int, input_dim: int, 
-                                        bounds: np.ndarray, jitter: float = 0.0) -> torch.Tensor:
-        
+    def generate_lhs_samples_with_jitter(n_samples: int, input_dim: int, bounds: np.ndarray, jitter: float = 0.0):
         if bounds.shape[0] != input_dim:
             raise ValueError("Bounds array must have shape (input_dim, 2)")
             
@@ -64,54 +61,14 @@ class SeqModel:
     
     
     @staticmethod
-    def jitter_schedule(t: int, T: int, sigma_init: float = 0.001, sigma_max: float = 0.15) -> float:
+    def jitter_schedule(t: int, T: int, sigma_init: float = 0.001, sigma_max: float = 0.15):
         
         sigma_t = sigma_init + (sigma_max - sigma_init) * (t / T)
         return sigma_t
     
     
-    ###* Acquisition function
     @staticmethod
-    def acquisition_score(candidate: np.ndarray, uncertainty: float, S: np.ndarray, lambda_diversity: float, tolerance: float = 1e-2) -> float:
-        
-        if S.size == 0:
-            diversity = 0.0
-        else:
-            distances = np.linalg.norm(S - candidate, axis=1)
-            diversity = np.min(distances)
-        return uncertainty + lambda_diversity * diversity
-    
-    
-    ###* Greedy selection of candidates - the action
-    @staticmethod
-    def greedy_selection(candidates: torch.Tensor, uncertainties: np.ndarray, buffer: np.ndarray, n_action: int, lambda_diversity: float = 1.0, tolerance: float = 1e-3) -> np.ndarray:
-        
-        candidates_np = candidates.numpy()
-        if buffer is None or len(buffer) == 0:
-            S = np.empty((0, candidates_np.shape[1]))
-        else:
-            S = buffer.copy()
-        
-        # Compute minimum distances (vectorized)
-        if S.size == 0:
-            min_distances = np.full(len(candidates_np), np.inf)
-        else:
-            # distances = np.linalg.norm(candidates_np[:, None, :] - S[None, :, :], axis=2)
-            distances = np.sum(np.abs(candidates_np[:, None, :] -  S[None, :, :]), axis=2)
-            min_distances = distances.min(axis=1)
-        
-        valid_indices = np.where(min_distances > tolerance)[0]
-        if valid_indices.size == 0:
-            raise ValueError('No candidates are far enough from the buffer')
-        
-        scores = np.array([SeqModel.acquisition_score(candidates_np[i], uncertainties[i], S, lambda_diversity, tolerance) for i in valid_indices])
-        
-        top_indices = valid_indices[np.argpartition(-scores, n_action)[:n_action]]
-        return candidates_np[top_indices]
-    
-    
-    @staticmethod
-    def train_network(model: nn.Module, dataset: TensorDataset, config: dict) -> nn.Module:
+    def train_network(model: nn.Module, dataset: TensorDataset, config: dict):
         
         subset_size = int(len(dataset) * config['subset_frac'])
         indices = np.random.choice(len(dataset), size=subset_size, replace=True)
@@ -134,7 +91,7 @@ class SeqModel:
     
     
     @staticmethod
-    def ensemble_predict(ensemble: list, x_input: torch.Tensor, mc_dropout: bool = False, mc_runs: int = 10, entropy_flag=False) -> (np.ndarray, np.ndarray):
+    def ensemble_predict(ensemble: list, x_input: torch.Tensor, mc_dropout: bool = False, mc_runs: int = 10, entropy_flag=False):
         predictions = []
         for model in ensemble:
             if mc_dropout:
@@ -176,15 +133,22 @@ class SeqModel:
             mean_pred = np.mean(predictions, axis=1)                     # (n_samples, output_dim)
             std_pred = np.std(predictions, axis=1)                       # (n_samples, output_dim)
             
-            score = np.mean(std_pred, axis=-1)                             # (n_samples,)
+            score = np.mean(std_pred, axis=-1)                           # (n_samples,)
             
             return mean_pred, std_pred, score
-        
-        
+    
+    
     def train_ensemble(self, x_new: np.ndarray, memory_replay_fraction: float = 0.3) -> None:
         
         x_new_tensor = torch.tensor(x_new, dtype=torch.float32)
         x_new_tensor, y_new_tensor = env.generate_data(x_new_tensor)
+        
+        ###! Scale the new data using the old scaler
+        x_new_scaled = self.standard_scaler_x.transform(x_new_tensor.numpy())
+        y_new_scaled = self.standard_scaler_y.transform(y_new_tensor.numpy())
+        x_new_tensor = torch.tensor(x_new_scaled, dtype=torch.float32)
+        y_new_tensor = torch.tensor(y_new_scaled, dtype=torch.float32)
+        
         new_dataset = TensorDataset(x_new_tensor, y_new_tensor)
         
         if self.buffer is not None:
@@ -215,33 +179,96 @@ class SeqModel:
     
     
     ###* MDP functions
-    
     def init_ensemble(self, x_init: torch.Tensor) -> None:
         ###* Initialize the ensemble with a set of initial points
         
         x_init, y_init = env.generate_data(x_init)
+        
+        ###! Scale the initial data
+        x_init_scaled = self.standard_scaler_x.fit_transform(x_init.numpy())
+        y_init_scaled = self.standard_scaler_y.fit_transform(y_init.numpy())
+        x_init = torch.tensor(x_init_scaled, dtype=torch.float32)
+        y_init = torch.tensor(y_init_scaled, dtype=torch.float32)
+        
         dataset = TensorDataset(x_init, y_init)
         for i, model in enumerate(self.ensemble_models):
             self.ensemble_models[i] = SeqModel.train_network(model, dataset, self.config)
         self.update_buffer(x_init, y_init)
     
     
-    def state(self, t: int) -> torch.Tensor:
+    def compute_expected_gradients(self, x_input, mean_pred, sigma_pred):
+        
+        mean_pred_tensor = torch.tensor(mean_pred, dtype=torch.float32)
+        x_input_tensor = torch.tensor(x_input, dtype=torch.float32, requires_grad=True)
+        
+        expected_gradients = []
+        for model in self.ensemble_models:
+            
+            model.eval()
+            model_pred_tensor = model(x_input_tensor)
+            y_sample_tensor = torch.tensor(np.random.normal(mean_pred, sigma_pred), dtype=torch.float32)
+            
+            loss = nn.MSELoss()(model_pred_tensor, y_sample_tensor)
+            loss.backward(retain_graph=True)
+            
+            if x_input_tensor.grad is not None:
+                x_input_tensor.grad.zero_()
+            
+            gradients = torch.autograd.grad(loss, x_input_tensor, create_graph=True)[0]
+            
+            grad_norm = torch.norm(gradients, dim=1)
+            expected_gradients.append(grad_norm.detach().numpy())
+        
+        expected_gradients = np.array(expected_gradients).transpose((1, 0))     # (n_samples, ensemble_size)
+        expected_gradients = np.mean(expected_gradients, axis=1)                # (n_samples,)
+        
+        return expected_gradients
+    
+    
+    def compute_distances(self, candidates: np.ndarray, buffer: np.ndarray):
+        if buffer is None or len(buffer) == 0:
+            return np.full(len(candidates), 1e3)
+        else:
+            distances = np.linalg.norm(candidates[:, None, :] -  buffer[None, :, :], axis=2)
+            return distances.min(axis=1)
+    
+    
+    def state(self, t: int):
         
         sigma_t = SeqModel.jitter_schedule(t, self.T)
         x_candidates = SeqModel.generate_lhs_samples_with_jitter(self.config['candidate_pool_size'], self.config['input_size'], self.bounds, jitter=sigma_t)
-        mean_pred, std_pred, score = SeqModel.ensemble_predict(self.ensemble_models, x_candidates)
         
+        mean_pred, std_pred, uncertainty = SeqModel.ensemble_predict(self.ensemble_models, x_candidates)
+        expected_gradient = self.compute_expected_gradients(x_candidates.numpy(), mean_pred, std_pred)
+        distances = self.compute_distances(x_candidates.numpy(), self.buffer[0].numpy() if self.buffer is not None else None)
         
         self.ensemble_mu.append(mean_pred)
         self.ensemble_sigma.append(std_pred)
-        return (x_candidates, mean_pred, std_pred, score)
+        return (x_candidates, mean_pred, std_pred, uncertainty, expected_gradient, distances)
     
     
-    def action(self, state, n_action: int = 20, lambda_diversity: float = 0.2) -> np.ndarray:
-
-        x_candidates, mu_vec, sigma_vec, score = state
+    @staticmethod
+    def acquisition_function(uncertainty_vec, expected_gradient_vec, distances_vec, lambda_vec):
         
-        buffer_points = self.buffer[0].numpy() if self.buffer is not None else None
-        next_samples = SeqModel.greedy_selection(x_candidates, score, buffer_points, n_action, lambda_diversity)
-        return next_samples
+        ### normalize the vectors
+        uncertainty_vec = (uncertainty_vec - np.min(uncertainty_vec)) / (np.max(uncertainty_vec) - np.min(uncertainty_vec))
+        expected_gradient_vec = (expected_gradient_vec - np.min(expected_gradient_vec)) / (np.max(expected_gradient_vec) - np.min(expected_gradient_vec))
+        distances_vec = (distances_vec - np.min(distances_vec)) / (np.max(distances_vec) - np.min(distances_vec))
+        
+        lambda_uncertainty = lambda_vec[0]
+        lambda_expected_gradient = lambda_vec[1]
+        lambda_diversity = lambda_vec[2]
+        
+        score = lambda_uncertainty * uncertainty_vec + lambda_expected_gradient * expected_gradient_vec + lambda_diversity * distances_vec
+        return score
+    
+    
+    def action(self, state, n_action: int = 20, lambda_vec=[0.4, 0.4, 0.2]) -> np.ndarray:
+        x_candidates, mu_vec, sigma_vec, uncertainty, expected_gradient, distances = state
+        
+        score_vec = SeqModel.acquisition_function(uncertainty, expected_gradient, distances, lambda_vec)
+        
+        #### greedy selection of candidates: top-n_action elements
+        state_top_k = np.argpartition(-score_vec, n_action)[:n_action]
+        
+        return x_candidates.numpy()[state_top_k]
