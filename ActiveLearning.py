@@ -138,7 +138,7 @@ class SeqModel:
             return mean_pred, std_pred, score
     
     
-    def train_ensemble(self, x_new: np.ndarray, memory_replay_fraction: float = 0.3) -> None:
+    def train_ensemble(self, x_new: np.ndarray, memory_replay_fraction: float = 0.3):
         
         x_new_tensor = torch.tensor(x_new, dtype=torch.float32)
         x_new_tensor, y_new_tensor = env.generate_data(x_new_tensor)
@@ -169,7 +169,7 @@ class SeqModel:
         
         
         
-    def update_buffer(self, x_new: torch.Tensor, y_new: torch.Tensor) -> None:
+    def update_buffer(self, x_new: torch.Tensor, y_new: torch.Tensor):
         
         if self.buffer is None:
             self.buffer = (x_new, y_new)
@@ -179,7 +179,7 @@ class SeqModel:
     
     
     ###* MDP functions
-    def init_ensemble(self, x_init: torch.Tensor) -> None:
+    def init_ensemble(self, x_init: torch.Tensor):
         ###* Initialize the ensemble with a set of initial points
         
         x_init, y_init = env.generate_data(x_init)
@@ -196,7 +196,8 @@ class SeqModel:
         self.update_buffer(x_init, y_init)
     
     
-    def compute_expected_gradients(self, x_input, mean_pred, sigma_pred):
+    def compute_expected_gradients_X(self, x_input, mean_pred, sigma_pred):
+        ###! taking the gradients of the loss function w.r.t. the input
         
         mean_pred_tensor = torch.tensor(mean_pred, dtype=torch.float32)
         x_input_tensor = torch.tensor(x_input, dtype=torch.float32, requires_grad=True)
@@ -223,6 +224,42 @@ class SeqModel:
         expected_gradients = np.mean(expected_gradients, axis=1)                # (n_samples,)
         
         return expected_gradients
+    
+    
+    def compute_expected_gradients(self, x_input, mean_pred, sigma_pred):
+        ###! taking the gradients of the loss function w.r.t. the model parameters
+        ###* include a vectorized version of this function later
+        
+        gradients_norms_ensemble = []
+        for i in range(x_input.shape[0]):
+            
+            x = torch.tensor(x_input[i:i+1], dtype=torch.float32, requires_grad=True)
+            
+            gradients_norms = []
+            for model in self.ensemble_models:
+                
+                model.eval()
+                model_pred = model(x)
+                y_sample = np.random.normal(mean_pred[i], sigma_pred[i])
+                y_sample_tensor = torch.tensor(y_sample, dtype=torch.float32).unsqueeze(0)
+
+                loss = nn.MSELoss()(model_pred, y_sample_tensor)
+                
+                model.zero_grad()
+                loss.backward()
+                
+                total_norm_sq = 0.0
+                for param in model.parameters():
+                    if param.grad is not None:
+                        total_norm_sq += torch.norm(param.grad).item() ** 2
+                
+                total_norm = total_norm_sq ** 0.5
+                gradients_norms.append(total_norm)
+                
+            gradients_norms = np.array(gradients_norms)
+            gradients_norms_ensemble.append(gradients_norms.mean())
+    
+        return gradients_norms_ensemble
     
     
     def compute_distances(self, candidates: np.ndarray, buffer: np.ndarray):
@@ -263,7 +300,7 @@ class SeqModel:
         return score
     
     
-    def action(self, state, n_action: int = 20, lambda_vec=[0.4, 0.4, 0.2]) -> np.ndarray:
+    def action(self, state, n_action: int = 20, lambda_vec=[0.4, 0.4, 0.2]):
         x_candidates, mu_vec, sigma_vec, uncertainty, expected_gradient, distances = state
         
         score_vec = SeqModel.acquisition_function(uncertainty, expected_gradient, distances, lambda_vec)

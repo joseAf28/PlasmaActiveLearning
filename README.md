@@ -118,7 +118,7 @@ The proposed acquisition function pretends select the most *informative* samples
   $$
   be the gradient vector when. $x$ is associated with a target $y$.  Since $y$ is unknown at the query time, we define an expected gradient norm over the predictive distribution $p(y|x)$:
   $$
-  G(x) = \frac{1}{N} \sum^M_{i=1} \int ||g_{i}(x, y) ||^2 p(y|x) dy \newline 
+  G(x) = \frac{1}{N} \sum^M_{i=1} \int ||g_{i}(x, y) ||^2 p(y|x) dy \approx \newline 
   \approx \frac{1}{N} \sum^M_{i=1} ||g_i(x, \hat{y}_i)||^2 ~~~\text{where} ~~ \hat{y}_i\sim \mathcal{N}(\mu_i(x), \sigma^2_i(x))
   $$
 
@@ -152,11 +152,11 @@ In this way the Acquisition function $A(x)$ is designed to select candidate samp
 
 ## Pipeline and Model Architecture
 
-The complete pipeline is available on GitHub [https://github.com/joseAf28/PlasmaActiveLearning]. For experimental purposes, we initially use synthetic data generated from a known function $F: \mathbb{R}^{3} \to \mathbb{R}^{10}$ (defined in *PhysicalModel.py*) to validate the framework. The surrogate model comprises an ensemble of neural networks with the following hyperparameter configuration:
+The complete pipeline is available on GitHub [https://github.com/joseAf28/PlasmaActiveLearning]. For experimental purposes, we use synthetic data generated from a known function $F: \mathbb{R}^{3} \to \mathbb{R}^{10}$ (defined in *PhysicalModel.py*) to validate the framework. The surrogate model comprises an ensemble of neural networks with the following hyperparameter configuration:
 
 ```python
 config = {
-    'ensemble_size': 10,
+    'ensemble_size': 10,		# ensemble composed by 10 neural nets
     'input_size': 3,
     'hidden_size': 256,			# For each ensemble's neural net
     'output_size': 10,
@@ -180,30 +180,30 @@ This configuration represents a trade-off between model complexity and computati
 #### Baseline Models
 
 - **Baseline 1:**
-  A neural network with an identical architecture and training regimen as each ensemble member. Its dataset is generated using traditional Latin hypercube sampling.
+  A neural network with an identical architecture and training regimen as each ensemble member aside the number of epochs (800). Its dataset is generated using traditional Latin hypercube sampling.
 - **Baseline 2:**
-  A neural network trained on data collected by the ensemble predictor.
+  A neural network trained on data collected by the ensemble predictor and with the same procedure as baseline 1 model.
 
 #### Performamce Analysis
 
 Our experiments reveal that the ensemble predictor, enhanced through active learning, consistently outperforms the baseline models. Key observations include:
 
 **Mean Squared Error (MSE) Improvement:**
-The ensemble model exhibits significant MSE reductions, achieving gains up to 52% compared to the baseline predictor when evaluated at 500 buffer size.
+The ensemble model exhibits significant MSE reductions, achieving gains up to 70% compared to the baseline predictor when evaluated at 500 buffer size.
 
 **Computational Overhead:**
-While the ensemble model requires approximately 2.4 times the computational effort compared to the baseline model (with a 500-sample buffer), the training times remain tractable—the baseline  model requires less than 10 seconds to train.
+While the ensemble model requires approximately 4.0 times the computational effort compared to the baseline model, the training times remain tractable—the baseline  model requires less than 5 seconds to train.
 
 **Insights on Data Buffering:**
-Although the ensemble predictor benefits from using its internally collected dataset, a similar gain is not observed when a new model (with independently generated weights) is trained on the buffered data. This discrepancy highlights the importance of ensemble-specific weight initialization and learning dynamics, which merit further investigation.
+Although the ensemble predictor benefits from using its internally collected dataset, a similar gain is not observed when a new model (with independently generated weights) is trained on the buffered data. This discrepancy highlights the importance of ensemble-specific weight initialization and learning dynamics, which merit further exploration.
 
 
 
-![](/Users/joseafonso/Desktop/PlasmaActiveLearning/Figures/loss_curves_10_[0.25 0.7  0.05]_20_10.png)
+![](/Users/joseafonso/Desktop/PlasmaActiveLearning/FiguresNew/loss_curves_10_[0.25 0.7  0.05]_20_10.png)
 
 
 
-![](/Users/joseafonso/Desktop/PlasmaActiveLearning/Figures/time_curves_10_[0.25 0.7  0.05]_20_10.png)
+![](/Users/joseafonso/Desktop/PlasmaActiveLearning/FiguresNew/time_curves_10_[0.25 0.7  0.05]_20_10.png)
 
 
 

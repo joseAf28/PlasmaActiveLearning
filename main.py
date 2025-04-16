@@ -25,30 +25,9 @@ logger = logging.getLogger(__name__)
 
 if __name__ == '__main__':
     
-    foldername = 'Figures'
+    foldername = 'FiguresNew'
     
-    ##* Init Configs
-    # config = {
-    #     'ensemble_size': 10,
-    #     'input_size': 3,         
-    #     'hidden_size': 256,
-    #     'dropout_rate': 0.1,
-    #     'do_dropout': False,
-    #     'output_size': 10,
-        
-    #     'num_epochs': 70,# 150      
-    #     'batch_size': 32,
-    #     'learning_rate': 1e-2,
-        
-    #     'candidate_pool_size': 150,
-    #     'n_samples': 200,    # 30
-    #     'subset_frac': 0.7,
-    #     'mc_runs': 1,
-    #     'n_actions': 15,
-    #     'lambda_vec': np.array([0.2,0.6,0.2])
-    # }
-    
-    ###? new update
+    ##* Config
     config = {
         'ensemble_size': 10,
         'input_size': 3,         
@@ -68,7 +47,6 @@ if __name__ == '__main__':
         'n_actions': 15,
         'lambda_vec': np.array([0.25,0.7,0.05])
     }
-
     
     if config['input_size'] == 1:
         bounds = np.array([[0, 2]])
@@ -94,6 +72,7 @@ if __name__ == '__main__':
     loss_test_baseline_buffer_vec = []
     size_buffer_vec = []
     extra_time_vec = []
+    baseline_time_vec = []
     
     time_acc = 0.0
     
@@ -141,7 +120,6 @@ if __name__ == '__main__':
             plot_system(x_train, y_train, x_test, mu_vec, sigma_vec, i, next_samples, foldername) 
         
         elif config['input_size'] == 2:
-            # Create a grid for plotting in 2D
             num_points_grid = 50
             x1 = np.linspace(bounds[0, 0], bounds[0, 1], num_points_grid)
             x2 = np.linspace(bounds[1, 0], bounds[1, 1], num_points_grid)
@@ -181,12 +159,10 @@ if __name__ == '__main__':
         
         size_buffer_vec.append(n_samples)
         
-        if i == nb_iters - 1:
-            time_init = time.time()
-        
         standard_scaler_baseline_x = StandardScaler()
         standard_scaler_baseline_y = StandardScaler()
         
+        time_init_basline = time.time()
         x_train = al.SeqModel.generate_lhs_samples_with_jitter(n_samples, config2['input_size'], bounds, jitter=0.0)
         y_train = env.generate_data(x_train)[1]
         
@@ -200,11 +176,11 @@ if __name__ == '__main__':
         ### train the model
         model_standard = al.SeqModel.train_network(model_standard, dataset, config2)
         
+        time_end_baseline = time.time()
+        baseline_time_vec.append(time_end_baseline - time_init_basline)
+        
         dataset_buffer = TensorDataset(seq_model.buffer[0], seq_model.buffer[1])
         model_standard_buffer = al.SeqModel.train_network(model_standard_buffer, dataset_buffer, config2)
-        
-        if i == nb_iters - 1:
-            Delta_time_baseline = time.time() - time_init
         
         print()
         
@@ -228,8 +204,8 @@ if __name__ == '__main__':
     
     
     ### save ensemble models and the buffer 
-    torch.save(seq_model.ensemble_models, 'ensemble_models.pth')
-    torch.save(seq_model.buffer, 'buffer.pth')
+    torch.save(seq_model.ensemble_models, 'saved_models/ensemble_models.pth')
+    torch.save(seq_model.buffer, 'saved_models/buffer.pth')
     
     ### save the scaler
     torch.save(seq_model.standard_scaler_x, 'standard_scaler_x.pth')
@@ -250,13 +226,16 @@ if __name__ == '__main__':
     plt.yscale('log')
     plt.savefig(f"{foldername}/loss_curves_{config["ensemble_size"]}_{config['lambda_vec']}_{nb_iters}_{config['ensemble_size']}.png")
     
+    extra_time_vec = np.array(extra_time_vec)
+    baseline_time_vec = np.array(baseline_time_vec)
     
     plt.figure(figsize=(10, 6))
-    plt.plot(size_buffer_vec, extra_time_vec, label='Time per Iteration', marker='o')
-    plt.scatter(size_buffer_vec[-1], Delta_time_baseline, color='red', label='Baseline Time')
+    plt.plot(size_buffer_vec, extra_time_vec, label='Ensemble Model', marker='o')
+    plt.plot(size_buffer_vec, baseline_time_vec, label='Baseline Time Model', marker='x')
+    plt.plot(size_buffer_vec, extra_time_vec / baseline_time_vec, label='Ratio', marker='s')
     plt.xlabel('Buffer Size')
     plt.ylabel('Time (s)')
-    plt.title(f"ratio: {round(extra_time_vec[-1] / Delta_time_baseline, 3)}")
+    # plt.title(f"ratio: {round(extra_time_vec[-1] / , 3)}")
     plt.legend()
     plt.grid()
     plt.yscale('log')
