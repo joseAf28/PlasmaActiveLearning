@@ -1,11 +1,12 @@
 
 
+LoKI_v3/
 copy/
 scaling/
 Attempts/
 FiguresOld/
-FiguresScale/
-Figures/
+old_models/
+saved_models/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

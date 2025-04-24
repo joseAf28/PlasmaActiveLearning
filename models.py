@@ -16,7 +16,7 @@ class SimpleNet(nn.Module):
         self.dropout = nn.Dropout(dropout_rate) if do_dropout else nn.Identity()
         self.fc2 = nn.Linear(hidden_dim, output_dim)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor):
         x = self.fc1(x)
         x = self.relu(x)
         x = self.dropout(x)

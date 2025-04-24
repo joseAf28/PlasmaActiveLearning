@@ -11,13 +11,12 @@ import matplotlib.pyplot as plt
 import time 
 
 import models
-import PhysicalModel as env
 
 
 ###* Sequential Model for Active Learning
 class SeqModel:
 
-    def __init__(self, config: dict, bounds: np.ndarray, T: int):
+    def __init__(self, config, bounds, T, simulator):
         
         self.config = config
         if not (isinstance(bounds, np.ndarray) and bounds.ndim == 2 and bounds.shape[1] == 2):
@@ -34,6 +33,8 @@ class SeqModel:
                             dropout_rate=config['dropout_rate'],
                             do_dropout=config['do_dropout'])
             self.ensemble_models.append(model)
+        
+        self.simulator = simulator
         
         self.buffer = None          # Aggregated training data as tuple (x, y)
         self.ensemble_mu = []       # History of ensemble mean predictions
@@ -68,25 +69,38 @@ class SeqModel:
     
     
     @staticmethod
-    def train_network(model: nn.Module, dataset: TensorDataset, config: dict):
+    def train_network(model: nn.Module, dataset: TensorDataset, config: dict, flag_init=False):
         
-        subset_size = int(len(dataset) * config['subset_frac'])
-        indices = np.random.choice(len(dataset), size=subset_size, replace=True)
-        bootstrap_dataset = torch.utils.data.Subset(dataset, indices)
-        dataloader = DataLoader(bootstrap_dataset, batch_size=config['batch_size'], shuffle=True)
+        if flag_init:
+            dataloader = DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
+        else:
+            subset_size = int(len(dataset) * config['subset_frac'])
+            indices = np.random.choice(len(dataset), size=subset_size, replace=True)
+            bootstrap_dataset = torch.utils.data.Subset(dataset, indices)
+            dataloader = DataLoader(bootstrap_dataset, batch_size=config['batch_size'], shuffle=True)
+            
+        if flag_init:
+            num_epochs = config['num_epoch_init']
+        else:
+            num_epochs = config['num_epochs']
         
         optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
         criterion = nn.MSELoss()
         model.train()
-        for epoch in range(config['num_epochs']):
+        
+        for epoch in range(num_epochs):
             for batch_x, batch_y in dataloader:
+                
                 optimizer.zero_grad()
                 outputs = model(batch_x)
+                
                 loss = criterion(outputs, batch_y)
+                
                 loss.backward()
                 optimizer.step()
             scheduler.step()
+        
         return model
     
     
@@ -111,6 +125,7 @@ class SeqModel:
         
         ### predictions : (ensemble_size, n_samples, output_dim)
         predictions = np.array(predictions).transpose((1, 0, 2))    # (n_samples, ensemble_size, output_dim)
+        
         
         if entropy_flag:
             #### log det Covariance way
@@ -140,8 +155,10 @@ class SeqModel:
     
     def train_ensemble(self, x_new: np.ndarray, memory_replay_fraction: float = 0.3):
         
+        ###* run the simulator to get the new data
+        y_new, _ = self.simulator.run_simulation(x_new)
         x_new_tensor = torch.tensor(x_new, dtype=torch.float32)
-        x_new_tensor, y_new_tensor = env.generate_data(x_new_tensor)
+        y_new_tensor = torch.tensor(y_new, dtype=torch.float32)
         
         ###! Scale the new data using the old scaler
         x_new_scaled = self.standard_scaler_x.transform(x_new_tensor.numpy())
@@ -165,7 +182,7 @@ class SeqModel:
         self.update_buffer(x_new_tensor, y_new_tensor)
         
         for i, model in enumerate(self.ensemble_models):
-            self.ensemble_models[i] = SeqModel.train_network(model, combined_dataset, self.config)
+            self.ensemble_models[i] = SeqModel.train_network(model, combined_dataset, self.config, flag_init=False)
         
         
         
@@ -179,10 +196,12 @@ class SeqModel:
     
     
     ###* MDP functions
-    def init_ensemble(self, x_init: torch.Tensor):
+    def init_ensemble(self, x_init: torch.Tensor, y_init: torch.Tensor = None, pbar=None):
         ###* Initialize the ensemble with a set of initial points
         
-        x_init, y_init = env.generate_data(x_init)
+        if y_init is None:
+            y_init, _ = self.simulator.run_simulation(x_init.numpy(), pbar=pbar)
+            y_init = torch.tensor(y_init, dtype=torch.float32)
         
         ###! Scale the initial data
         x_init_scaled = self.standard_scaler_x.fit_transform(x_init.numpy())
@@ -192,7 +211,7 @@ class SeqModel:
         
         dataset = TensorDataset(x_init, y_init)
         for i, model in enumerate(self.ensemble_models):
-            self.ensemble_models[i] = SeqModel.train_network(model, dataset, self.config)
+            self.ensemble_models[i] = SeqModel.train_network(model, dataset, self.config, flag_init=True)
         self.update_buffer(x_init, y_init)
     
     
@@ -210,7 +229,6 @@ class SeqModel:
             y_sample_tensor = torch.tensor(np.random.normal(mean_pred, sigma_pred), dtype=torch.float32)
             
             loss = nn.MSELoss()(model_pred_tensor, y_sample_tensor)
-            loss.backward(retain_graph=True)
             
             if x_input_tensor.grad is not None:
                 x_input_tensor.grad.zero_()
@@ -237,24 +255,24 @@ class SeqModel:
             
             gradients_norms = []
             for model in self.ensemble_models:
-                
                 model.eval()
                 model_pred = model(x)
+                
                 y_sample = np.random.normal(mean_pred[i], sigma_pred[i])
                 y_sample_tensor = torch.tensor(y_sample, dtype=torch.float32).unsqueeze(0)
-
+                
                 loss = nn.MSELoss()(model_pred, y_sample_tensor)
                 
                 model.zero_grad()
                 loss.backward()
                 
-                total_norm_sq = 0.0
+                total_norm = 0.0
                 for param in model.parameters():
                     if param.grad is not None:
-                        total_norm_sq += torch.norm(param.grad).item() ** 2
+                        total_norm += torch.norm(param.grad).item() ** 2
                 
-                total_norm = total_norm_sq ** 0.5
-                gradients_norms.append(total_norm)
+                total_norm_sq = total_norm ** 0.5
+                gradients_norms.append(total_norm_sq)
                 
             gradients_norms = np.array(gradients_norms)
             gradients_norms_ensemble.append(gradients_norms.mean())
@@ -272,16 +290,19 @@ class SeqModel:
     
     def state(self, t: int):
         
+        ###* candidate pool scaled
         sigma_t = SeqModel.jitter_schedule(t, self.T)
         x_candidates = SeqModel.generate_lhs_samples_with_jitter(self.config['candidate_pool_size'], self.config['input_size'], self.bounds, jitter=sigma_t)
+        x_candidates_scaled = torch.tensor(self.standard_scaler_x.transform(x_candidates.numpy()), dtype=torch.float32)
         
-        mean_pred, std_pred, uncertainty = SeqModel.ensemble_predict(self.ensemble_models, x_candidates)
-        expected_gradient = self.compute_expected_gradients(x_candidates.numpy(), mean_pred, std_pred)
-        distances = self.compute_distances(x_candidates.numpy(), self.buffer[0].numpy() if self.buffer is not None else None)
+        mean_pred, std_pred, uncertainty = SeqModel.ensemble_predict(self.ensemble_models, x_candidates_scaled)
+        
+        expected_gradient = self.compute_expected_gradients(x_candidates_scaled.numpy(), mean_pred, std_pred)
+        distances = self.compute_distances(x_candidates_scaled.numpy(), self.buffer[0].numpy() if self.buffer is not None else None)
         
         self.ensemble_mu.append(mean_pred)
         self.ensemble_sigma.append(std_pred)
-        return (x_candidates, mean_pred, std_pred, uncertainty, expected_gradient, np.reciprocal(distances))
+        return (x_candidates_scaled, mean_pred, std_pred, uncertainty, expected_gradient, np.reciprocal(distances))
     
     
     @staticmethod
@@ -301,11 +322,14 @@ class SeqModel:
     
     
     def action(self, state, n_action: int = 20, lambda_vec=[0.4, 0.4, 0.2]):
-        x_candidates, mu_vec, sigma_vec, uncertainty, expected_gradient, distances = state
+        x_candidates_scaled, mu_vec, sigma_vec, uncertainty, expected_gradient, distances = state
         
         score_vec = SeqModel.acquisition_function(uncertainty, expected_gradient, distances, lambda_vec)
         
         #### greedy selection of candidates: top-n_action elements
         state_top_k = np.argpartition(-score_vec, n_action)[:n_action]
         
-        return x_candidates.numpy()[state_top_k]
+        next_samples = x_candidates_scaled.numpy()[state_top_k]
+        next_samples_unscaled = self.standard_scaler_x.inverse_transform(next_samples)
+        
+        return next_samples_unscaled
