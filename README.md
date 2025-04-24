@@ -108,9 +108,7 @@ The proposed acquisition function pretends select the most *informative* samples
   U(x) = \text{std}\left(\{ y_i\}^M_{i=1} \right)
   $$
 
-- 
-
-- **Gradient Update Estimate** $G(x)$:
+- **Gradient Update sxEstimate** $G(x)$:
 
   This term quantifies the expected magnitude of the update of the model parameters if the point $x$ was added to the training set. For each ensemble member $i$ with parameters $\theta$ and loss function $L(\cdot,\cdot)$, let
   $$
@@ -152,7 +150,13 @@ In this way the Acquisition function $A(x)$ is designed to select candidate samp
 
 ## Pipeline and Model Architecture
 
-The complete pipeline is available on GitHub [https://github.com/joseAf28/PlasmaActiveLearning]. For experimental purposes, we use synthetic data generated from a known function $F: \mathbb{R}^{3} \to \mathbb{R}^{10}$ (defined in *PhysicalModel.py*) to validate the framework. The surrogate model comprises an ensemble of neural networks with the following hyperparameter configuration:
+The complete pipeline is available on GitHub [https://github.com/joseAf28/PlasmaActiveLearning]. 
+
+We use the LisbOn KInetics (LoKI) simulation tool as our physical simulator for experimental purposes. This tool intends to model non-equilibrium low-temperature plasmas (LTPs) produced from different gases or gas mixtures under a wide range of working conditions. It comprises two modules: LoKI-B, available on [https://github.com/IST-Lisbon/LoKI], and LoKI-C, which is not publicly available.
+
+We consider a simple system that effectively corresponds to a function $F: \mathbb{R}^3 \to \mathbb{R}^3$, the function that, for a given change in the input experimental conditions to assumed default values - tuple of the changed experimental conditions - computes the equilibrium concentrations of the chemical species.
+
+The surrogate model comprised an ensemble of neural networks with the following hyperparameter configuration:
 
 ```python
 config = {
@@ -160,14 +164,15 @@ config = {
     'input_size': 3,
     'hidden_size': 256,			# For each ensemble's neural net
     'output_size': 10,
+  	'num_epochs_init': 400,	# For the initial state
     'num_epochs': 70,       # For each state
     'batch_size': 32,
     'learning_rate': 1e-2,
     'candidate_pool_size': 150, # Candidate Pool size
-    'n_samples': 200,       # Initial buffer size
+    'n_samples': 150,       # Initial buffer size
     'subset_frac': 0.7,     # Memory buffer fraction to mitigate catastrophic forgetting
     'n_actions': 15,        # Number of samples taken at each action
-    'lambda_vec': np.array([0.25, 0.7, 0.05])  # Weights for the acquisition function: (α, β, γ)
+    'lambda_vec': np.array([0.12, 0.85, 0.03])  # Weights for the acquisition function: (α, β, γ)
 }
 ```
 
@@ -177,33 +182,27 @@ This configuration represents a trade-off between model complexity and computati
 
 ## Experimental Results and Comparison 
 
-#### Baseline Models
+#### 
 
-- **Baseline 1:**
-  A neural network with an identical architecture and training regimen as each ensemble member aside the number of epochs (800). Its dataset is generated using traditional Latin hypercube sampling.
-- **Baseline 2:**
-  A neural network trained on data collected by the ensemble predictor and with the same procedure as baseline 1 model.
-
-#### Performamce Analysis
-
-Our experiments reveal that the ensemble predictor, enhanced through active learning, consistently outperforms the baseline models. Key observations include:
-
-**Mean Squared Error (MSE) Improvement:**
-The ensemble model exhibits significant MSE reductions, achieving gains up to 70% compared to the baseline predictor when evaluated at 500 buffer size.
-
-**Computational Overhead:**
-While the ensemble model requires approximately 4.0 times the computational effort compared to the baseline model, the training times remain tractable—the baseline  model requires less than 5 seconds to train.
-
-**Insights on Data Buffering:**
-Although the ensemble predictor benefits from using its internally collected dataset, a similar gain is not observed when a new model (with independently generated weights) is trained on the buffered data. This discrepancy highlights the importance of ensemble-specific weight initialization and learning dynamics, which merit further exploration.
+A neural network with an identical architecture and training regimen as each ensemble member aside the number of epochs (600). Its dataset is generated using traditional Latin hypercube sampling. 
 
 
 
-![](/Users/joseafonso/Desktop/PlasmaActiveLearning/FiguresNew/loss_curves_10_[0.25 0.7  0.05]_20_10.png)
+Our experiments reveal that the ensemble predictor, enhanced through active learning, almost always consistently outperforms the baseline models for a buffer size larger than $\sim 300$ samples.
+
+![](/Users/joseafonso/Desktop/PlasmaActiveLearning/figures/panel.png)
 
 
 
-![](/Users/joseafonso/Desktop/PlasmaActiveLearning/FiguresNew/time_curves_10_[0.25 0.7  0.05]_20_10.png)
+**Figure 1a** presents the RMSE for the ensemble models, the one that include active learning (blue) line and the one trained on the latin hypercube domain discretization (orange) as a function of the buffer size. 
+
+**Figure 1b** shows the RMSE percentage gain (or loss) of the active learning case when compared to the baseline case for Figure 1a as a function of the buffer size.
+
+As a result, we can conclude for a buffer size larger than $\sim 300$ samples this approach almost always outperforms the baseline case with gains between $10-20 \%$.  At very small budgets $(N≲200)$, the active‐learning ensemble (blue) actually starts off slightly worse than the latin‐hypercube baseline (orange), owing to the cold‐start noise in the first few acquisition steps. 
+
+**Figure 1c** shows that, while both schemes scale essentially linearly with N, the active-learning strategy, which warm-starts from the previous model and only fine-tunes on the $\Delta N$ new points, cuts out the cost of re-processing all $N$ samples at every iteration. By contrast, the baseline at each buffer size $N$ generates  $N$ samples from the physical simulator and then trains the model from scratch on all $N$ points (for 600 epochs). As a result, at $N = 500$ the active-learning loop is already over $100 s$ faster than the baseline.
+
+**Figure 1d** plots the time ratio (active / baseline) as a function of buffer size. You can see that beyond $\sim300$ samples the ratio drops below $0.75$ and continues to fall toward $\sim0.6$ at our largest buffer size, confirming that our incremental‐retraining scheme becomes increasingly efficient as more data are collected.
 
 
 
@@ -211,8 +210,6 @@ Although the ensemble predictor benefits from using its internally collected dat
 
 Our active learning framework illustrates a strategy for improving surrogate modeling in simulation tasks. The integration of uncertainty quantification, expected gradient updates, and coverage metrics into the acquisition function aids in efficiently directing the sampling process. Future work may involve:
 
-- **Integration with the LoKI Simulator:**
-  Exploring the pipeline with the physical simulator LoKI to validate performance on real-world data.
 - **Hyperparameter Fine-Tuning:**
   Refining the model hyperparameters and acquisition function weights to further enhance performance and sample efficiency.
 - **Extension to Offline Models:**

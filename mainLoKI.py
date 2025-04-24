@@ -31,8 +31,6 @@ if __name__ == '__main__':
     
     file_path_sim = 'LoKI_v3/Code'
     x_names = ['wallTemperature', 'gasPressure', 'electronDensity']
-    
-    input_dim = len(x_names)
     bounds = np.array([[300, 400], [300, 900], [1e15, 1e16]])
     
     eng = matlab.engine.start_matlab()
@@ -46,6 +44,7 @@ if __name__ == '__main__':
         y_input_test = f['y_samples'][:]
     
     
+    input_dim = len(x_names)
     output_dim = y_input_test.shape[1]
     
     ###* active learning task
@@ -79,7 +78,6 @@ if __name__ == '__main__':
     ##* use instead the data for the initial buffer
     ## Generate initial training samples via LHS (no jitter for initial samples)
     # x_init = al.SeqModel.generate_lhs_samples_with_jitter(config['n_samples'], config['input_size'], bounds, jitter=0.0)
-    
     with h5py.File('inital_buffer.hdf5', 'r') as f:
         x_init = f['x_samples'][:]
         y_init = f['y_samples'][:]
@@ -105,6 +103,7 @@ if __name__ == '__main__':
     x_input_test_scaled = seq_model.standard_scaler_x.transform(x_input_test)
     y_input_test_scaled = seq_model.standard_scaler_y.transform(y_input_test)
     x_input_test_scaled_tensor = torch.tensor(x_input_test_scaled, dtype=torch.float32)
+    
     mean_pred_test, sigma_pred_test, _ = al.SeqModel.ensemble_predict(seq_model.ensemble_models, x_input_test_scaled_tensor)
     loss = np.mean(np.square(mean_pred_test - y_input_test_scaled))
     logger.info(f"Initial Test: MSE Loss: {loss},  Avg Uncertainty: {np.mean(sigma_pred_test)} | Size of buffer: {len(seq_model.buffer[0])}")
@@ -135,10 +134,6 @@ if __name__ == '__main__':
         
         
         ###* test the ensemble
-        x_input_test_scaled = seq_model.standard_scaler_x.transform(x_input_test)
-        y_input_test_scaled = seq_model.standard_scaler_y.transform(y_input_test)
-        x_input_test_scaled_tensor = torch.tensor(x_input_test_scaled, dtype=torch.float32)
-        
         mean_pred_test, sigma_pred_test, _ = al.SeqModel.ensemble_predict(seq_model.ensemble_models, x_input_test_scaled_tensor)
         loss = np.mean(np.square(mean_pred_test - y_input_test_scaled))
         
@@ -147,7 +142,7 @@ if __name__ == '__main__':
         iters_vec.append(i+1)
         
         logger.info(f"State Avg Sigma: {np.mean(state[3])}| Test: MSE Loss: {loss},  Avg Uncertainty: {np.mean(sigma_pred_test)} | Size of buffer: {len(seq_model.buffer[0])}")
-        
+    
     
     ###* saved data and metrics in hdf5 file
     with h5py.File('active_learning_results.hdf5', 'w') as f:
@@ -160,18 +155,5 @@ if __name__ == '__main__':
     
     ### save ensemble models and the buffer 
     torch.save(seq_model.ensemble_models, 'saved_models/ensemble_models.pth')
-    ### save the scaler
-    torch.save(seq_model.standard_scaler_x, 'standard_scaler_x.pth')
-    torch.save(seq_model.standard_scaler_y, 'standard_scaler_y.pth')
-    
-    
-    ### plot the results
-    fig, ax = plt.subplots()
-    ax.plot(buffer_size_vec, loss_test_ensemble_vec, label='Test MSE Loss')
-    ax.set_xlabel('Buffer Size')
-    ax.set_ylabel('Test MSE Loss')
-    ax.set_title('Test MSE Loss vs Buffer Size')
-    ax.set_yscale('log')
-    ax.legend()
-    fig.savefig(f"{foldername}/test_loss_vs_buffer_size_2.png")
-    
+    torch.save(seq_model.standard_scaler_x, 'saved_models/standard_scaler_x.pth')
+    torch.save(seq_model.standard_scaler_y, 'saved_models/standard_scaler_y.pth')

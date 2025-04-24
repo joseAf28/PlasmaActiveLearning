@@ -141,10 +141,10 @@ if __name__ == '__main__':
 
     ###* plot the results
     plt.figure(figsize=(10, 6))
-    plt.plot(buffer_size_vec, loss_test_ensemble_vec, label='Test Loss Ensemble', marker='o')
-    plt.plot(n_samples_vec, loss_test_baseline_I_vec, label='Test Loss Baseline', marker='x')
+    plt.plot(buffer_size_vec, np.sqrt(loss_test_ensemble_vec), label='Test Loss Ensemble', marker='o')
+    plt.plot(n_samples_vec, np.sqrt(loss_test_baseline_I_vec), label='Test Loss Baseline', marker='x')
     plt.xlabel('Buffer Size')
-    plt.ylabel('MSE Test Loss')
+    plt.ylabel('RMSE Test Loss')
     plt.title('Test Loss Comparison')
     plt.legend()
     plt.yscale('log')
@@ -164,6 +164,7 @@ if __name__ == '__main__':
     plt.xlabel('Buffer Size')
     plt.ylabel('% Gain RMSE')
     plt.title('Gain in RMSE')
+    plt.grid()
     plt.savefig('gain_rmse_LoKI.png')
     
     baseline_time_buffer_vec = np.array(baseline_time_buffer_vec)
